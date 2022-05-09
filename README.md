@@ -1,4 +1,4 @@
-# Modeling_beet-root_and_nematodes_interactions
+# Modeling beet root system and nematodes interactions
 
 ### Context
 
