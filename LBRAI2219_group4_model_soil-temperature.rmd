@@ -1,0 +1,243 @@
+---
+title: "modélisation de l'évolution de la température dans le sol"
+author: "artur Freeman"
+date: "09/05/2022"
+output:
+  html_document:
+    smart: no
+    code_folding: hide
+    collapsed: yes
+    fig_caption: yes
+    fig_height: 5
+    fig_width: 6
+    highlight: tango
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# Options générales des blocs de code R
+knitr::opts_chunk$set(comment="")
+knitr::opts_chunk$set(warning = FALSE)
+# Liste des packages à charger
+require(readxl)
+require(pander)
+panderOptions('knitr.auto.asis', FALSE)
+require(dplyr)
+require(car)
+require(Hmisc)
+require(EnvStats)
+require(emmeans)
+require(visreg)
+require(sjplot)
+require(FactoMineR)
+require(factoextra)
+require(ggplot2)
+require(NbClust)
+require(lubridate)
+```
+
+# importation des données
+```{r loaddata, include=FALSE}
+root_growth <- read.csv("C:/Users/artur/OneDrive/Documents/cours/modélisation/root speed data 1.csv")
+global_data <- read.csv("C:/Users/artur/OneDrive/Documents/cours/modélisation/global data roots 1.csv")
+mydata <- read.csv("C:/Users/artur/OneDrive/Documents/cours/modélisation/synop_data.csv")
+
+#une station à charleroi
+meteo <- mydata[mydata[,'the_geom'] == 'POINT (50.454432 4.442053)',]
+```
+
+# visualisation des données météo brutes 
+conversion des dates en jours de l'année et visualisation des données brutes
+```{r test1}
+
+temp <- data.frame(meteo[,'timestamp'],meteo[,'temp'])
+
+#convertire en timestamp
+meteo$timestamp <- ymd_hms(meteo$timestamp)
+meteo <- data.frame(meteo$timestamp,meteo$temp)
+meteo <- na.omit(meteo)
+
+#ici je convertis les dates en jour de l'année (de 1 à 365)
+meteo['dayofyear'] <- as.numeric(as.Date(meteo$meteo.timestamp)-as.Date("2021-01-01"))+1
+
+#ici je transforme les jours de l'année plus grand que 365 
+for (i in c(1:nrow(meteo))){
+if(meteo$dayofyear[i]>365) {
+ 
+  meteo$dayofyear[i] <- (meteo$dayofyear[i] - 365)} 
+}
+
+#visualisation
+plot(meteo$dayofyear,meteo$meteo.temp)
+head(meteo)
+```
+
+# visualisation des données météo nettoyées 
+
+les données proviennent de la région de Charleroi. Charleroi se trouve non loin des grandes régions betteravières Belges. On effectue la moyenne des températures pour chaque jour.
+```{r test3}
+#nécéssaire si plyr a été chargé avant dplyr
+#detach(package:plyr)
+library(dplyr)
+
+# #je fais la moyenne des températures pour chaque jour
+meteo_daily <-  meteo %>% group_by(dayofyear) %>%
+                    summarise(temp_daily = mean(meteo.temp))
+plot(meteo_daily$dayofyear,meteo_daily$temp_daily,xlab= "jours de l'année",ylab="température en °C", main = "température au cours de l'année mesurée à Charleroi")
+
+```
+
+
+# modélisation de la température du sol à l'aide d'une sinusoidale
+
+à partir de ces points de données on tente de modéliser l'évolution de la T° par une sinusoidale. Dans la sinusoidale on utilise des paramètres estimés initiaux : la moyenne beta1, l'amplitude beta2 et le déphasage beta3. Ces estimations sont décrites plus loin. 
+```{r plotsss}
+
+#la moyenne
+cat("\n je calcule les paramètres de l'équation qui servira à modéliser la sinusoidale\n ")
+Beta1 <- mean(meteo_daily$temp_daily)
+cat("\n la moyenne : ",Beta1)
+
+  #'l'amplitude
+  Beta2 <- (max(meteo_daily$temp_daily)-min(meteo_daily$temp_daily))/2
+  cat("\n l'amplitude : ", Beta2)
+  daymaxtemp <- meteo_daily$dayofyear[meteo_daily$temp_daily == max(meteo_daily$temp_daily)]
+  
+  # le déphasage
+    Beta3 <- (pi / 2) - (2 * pi * (daymaxtemp / 365))
+  cat('\n le déphasage : ',Beta3)
+
+ 
+```
+
+Les paramètres beta1 beta2 et beta3 correspondent à la moyenne des Températures sur l'année, l'amplitude des T° et le déphasage, respectivement. ils ont été estimés comme étant égaux à 1) la moyenne des températures 2) la différence entre la température max et la température min divisée par 2 et 3) la différence entre le moment où le maximum d'une fonction sin normale de produit(pi/2) et le moment où les températures max ont été observées.
+```{r params}
+  estimate <- Beta1 + Beta2 * sin(2 * pi * c(1:365) / 365 + Beta3)
+  toplot <- data.frame(meteo_daily$temp_daily,estimate)
+  
+ ggplot(as.data.frame(toplot), aes(x = c(1:365))) + 
+  geom_line(aes(y = unlist(toplot[1]), colour = "measured data")) + 
+  geom_line(aes(y = unlist(toplot[2]), colour = "unoptimized curve")) +
+   xlab("days since january 1rst") + 
+           ylab("tempperature in °C") +
+   ggtitle("comparison between non optimized curve and measured data")
+```
+
+## optimisation des paramètres
+
+on optimise les paramètres trouvés (beta1..3) pour faire en sorte que la sinusoidale se rapproche le plus des données mesurées. pour ça, on minmise la somme des carrés des erreurs entre les observations et la sinusoidale en jouant sur les betas (méthode de Newton)
+```{r optimisation}
+ 
+ cat("\n la somme des carrés des erreurs de cette première estimation : \n ")
+
+ #somme des carrésdes erreurs
+ SCE<- sum((toplot[1]-toplot[2])**2)
+ cat(SCE)
+ 
+ # je fais la sinusoidale sous forme de fonction
+ beta <- c(Beta1,Beta2,Beta3)
+ x <- c(1:365)
+ 
+ f<- function(x,beta){beta[1] + beta[2] * sin(2 * pi * x / 365 + beta[3])
+ }
+ SCE <- function(beta){sum((toplot[1]-f(c(1:365),beta))**2)}
+ 
+ # on optimise la fonction selon la méthode de newton - raphson
+ opti<- optim(beta,SCE,"BFGS")
+ cat('\n paramètres optimisés : \n')
+ cat(opti$par)
+  cat("\n la somme des carrés des erreurs de la courbe optimisée : \n ")
+  
+ beta_opti <- c(10.26,7.238,-1.973)
+  SCE<- SCE(beta_opti)
+ cat(SCE, '\n')
+ggplot(as.data.frame(toplot), aes(x = c(1:365))) + 
+  geom_line(aes(y = unlist(toplot[1]), colour = "données mesurées")) + 
+  geom_line(aes(y = unlist(f(c(1:365),beta_opti)), colour = "estimation")) +
+   xlab("jours depuis le 1er janvier") + 
+           ylab("température en °C") +
+   ggtitle("plot avec paramètres optimisés")
+```
+
+
+## modéliser la température à différentes profondeurs
+
+### hypothèses: 
+
+on fait l'approximation que la température  juste à la surface du sol = la température mesurée à 1m du sol, ce qui est raisonnable étant donné que les courants de convexion homogénisent la température de l'air
+
+la moyenne des températures  (beta1) ne change pas dans notre modèle, parce qu'on admet qu'aux profondeurs qui nous intéressent la chaleur émise par la terre elle-même n'influence pas significativement la température moyenne.
+
+
+
+
+```{r test4}
+
+bonk <- as.numeric(f(c(1:365),beta_opti))
+lambda <- 0.015 #diffusivité thermique
+
+alpha <-lambda
+#/(X*Cp)
+
+soiltemp <- function(depth,alpha) {beta_opti[1] +beta_opti[2]*(exp(-depth*sqrt(pi/(alpha*365))))*cos((((2*pi*c(1:365))/365))-depth*sqrt(pi/((alpha)*365))-beta_opti[3])}
+
+temp20cm <- soiltemp(0.2,0.015)
+ggplot(as.data.frame(toplot), aes(x = c(1:365))) + 
+  geom_line(aes(y = unlist(toplot[1]), colour = "measured 1 m above ground")) + 
+  geom_line(aes(y = unlist(f(c(1:365),beta_opti)), colour = "estimated at 0 m"))+
+  geom_line(aes(y = unlist(soiltemp(0.2,0.015)), colour = "estimated at 0,2 m")) + xlab("days since january 1rst") + geom_line(aes(y = unlist(soiltemp(0.5,0.015)), colour = "estimated at 0,5 m")) + xlab("days since january 1rst") + geom_line(aes(y = unlist(soiltemp(1,0.015)), colour = "estimated at 1 m")) + xlab("days since january 1rst") + geom_line(aes(y = unlist(soiltemp(2,0.015)), colour = "estimated at 2 m")) + xlab("days since january 1rst") +  
+           ylab("temperature in °C") +
+   ggtitle("temperature in humid clay-like soil throughout the year") +
+  labs(color = "temperature : ")
+
+bonk <- as.numeric(f(c(1:365),beta_opti))
+lambda <- 0.001 #diffusivité thermique
+alpha <-lambda
+
+
+soiltemp <- function(depth) {beta_opti[1] +beta_opti[2]*(exp(-depth*sqrt(pi/(alpha*365))))*cos((((2*pi*c(1:365))/365))-depth*sqrt(pi/((alpha)*365))-beta_opti[3])}
+
+temp20cm <- soiltemp(0.2)
+ggplot(as.data.frame(toplot), aes(x = c(1:365))) + 
+  geom_line(aes(y = unlist(toplot[1]), colour = "données mesurées")) + 
+  geom_line(aes(y = unlist(f(c(1:365),beta_opti)), colour = "température à 0 m"))+
+  geom_line(aes(y = unlist(soiltemp(0.2)), colour = "température à 0,2 m")) + xlab("jours depuis le 1er janvier") + geom_line(aes(y = unlist(soiltemp(0.5)), colour = "température à 0,5 m")) + xlab("jours depuis le 1er janvier") + geom_line(aes(y = unlist(soiltemp(1)), colour = "température à 1 m")) + xlab("jours depuis le 1er janvier") + geom_line(aes(y = unlist(soiltemp(2)), colour = "température à 2 m")) + xlab("jours depuis le 1er janvier") +  
+           ylab("température en °C") +
+   ggtitle("évolution de la température dans un sol de type Argile sec") +
+  labs(color = "Légende")
+
+
+```
+
+
+# calculer les paramètres racinaires
+
+Cette dernière section a servi à extraire certains paramètres racinaires de smartroot. elle n'est donc pas liée directement à la modélisation de la température dans le sol.
+```{r root system param}
+by_root <- root_growth %>% group_by(root_name) %>%
+                    summarise(total_length = sum(growth),
+                              initial_elongation_rate =sum(growth)/(date[length(date)]-date[1]+1), root_order =root_order[1])
+by_root <- by_root[!(by_root$initial_elongation_rate<0),]
+average_growth_rates <- by_root %>% group_by(root_order) %>% summarise(average_initial_growth_rate = mean(initial_elongation_rate))
+
+write.csv(average_growth_rates,"C:/Users/artur/OneDrive/Documents/cours/modélisation/average_growth_rates.csv")
+
+average_insertion_angle <- global_data %>% group_by(root_order) %>%
+                    summarise(mean(insertion_angle))
+
+cat("\n average growth rates \n")
+pander(average_growth_rates)
+cat("\n average insertion angles \n")
+pander(average_insertion_angle)
+cat("\n other params \n")
+pander(global_data)
+```

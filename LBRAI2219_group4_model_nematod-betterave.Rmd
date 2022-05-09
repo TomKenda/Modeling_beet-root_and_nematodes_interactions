@@ -1,0 +1,989 @@
+---
+title: "Analysing interactions between beet's rootsystem and nematodes"
+author: "Artur Freeman & Tom Kenda"
+date: '`r format(Sys.time(), "%B %d, %Y,%H:%M")`'
+output:
+  html_document: # options pour la mise en page des sortie HTML
+    smart: FALSE
+    code_folding: hide #  Cache le code  
+    collapsed: yes # Crée un document unique 
+    fig_caption: yes # Figures encapsulées ? 
+    fig_height: 5 # Hauteur par défaut des figures
+    fig_width: 6 # Largeur par défaut des figures
+    highlight: tango # Style de mise en valeur du code
+    number_sections: no # Ajout table des matières 
+    theme: united  # Style du document
+    toc: yes # Table des matiere ?
+    toc_depth: 3  # Profondeur table des matières
+    toc_float: yes # Table des matières flottante
+editor_options: 
+  chunk_output_type: console
+---
+
+########################################################################
+# 1 : SET UP
+########################################################################
+
+```{r setup, include=FALSE}
+
+# Options générales des blocs de code R
+knitr::opts_chunk$set(comment="")
+knitr::opts_chunk$set(warning = FALSE)
+
+### List of packages to load
+
+# default packages for CRootBox
+library(tidyverse)
+library(plyr)
+library(readr)
+library(data.table)
+library(dplyr)
+library(Matrix)
+
+# extra packages for our project
+require(readxl)
+require(pander)
+panderOptions('knitr.auto.asis', FALSE)
+require(car)
+require(Hmisc)
+require(EnvStats)
+require(emmeans)
+require(visreg)
+require(sjplot)
+require(FactoMineR)
+require(factoextra)
+require(ggplot2)
+require(NbClust)
+require(lubridate)
+library(reshape2)
+
+# in cas we have so solve ode
+# library(deSolve)
+```
+
+```{r , include=FALSE}
+#### Working directory and source functions
+
+# Tom
+setwd("/Users/tomk-/OneDrive - UCL/My UCL/LBRAI2219 - Modélisation biologique/crootbox/crootbox")
+source("inputs/io_function.R") # CROOTBOX function
+
+# Artur
+# setwd("C:/Users/artur/OneDrive/Documents/smartroot/crootbox")
+# source("C:/Users/artur/OneDrive/Documents/smartroot/crootbox/inputs/io_function.R") # CROOTBOX
+
+```
+
+*When using CRootBox for the first time you should also run this :*
+
+The code should compile with any c++11 compiler, e.g. for g++: MinGW has been tested. Then create a new system environment variable. Path --> `C:\MinGW\bin`
+
+```{r}
+
+# Open the terminal:
+#   cd ~/GitHub/marshal-pipeline/17_06 CRootBox
+# 
+# FOR MAC AND LINUX
+# g++ *.cpp -std=c++11 -o crootbox.out   
+# crootbox.out   
+#
+#
+# FOR WINDOWS
+# g++ *.cpp -std=c++11 -o crootbox.exe   
+# crootbox.exe
+
+
+# Custom functions
+# source("inputs/io_function.R") # CROOTBOX
+
+# Update the crootbox executable file
+# MAC
+# file.copy("inputs/crootbox_source/crootbox.out", 
+#           "inputs/crootbox.out", 
+#           overwrite = T)
+# WINDOWS
+# file.copy("inputs/crootbox_source/crootbox.exe", 
+#           "inputs/crootbox.exe", 
+#           overwrite = T)
+```
+
+########################################################################
+# 2 : SET THE SIMULATION PARAMETERS & RUN CROOTBOX
+########################################################################
+
+Note : a detailled list of the parameters can be found in the following article (namely in table 2 and 3 ) 
+
+    *Andrea Schnepf, Daniel Leitner, Magdalena Landl, Guillaume Lobet, Trung Hieu Mai, Shehan Morandage, Cheng Sheng, Mirjam Zörner, Jan Vanderborght, Harry Vereecken, CRootBox: a structural–functional modelling framework for root systems, Annals of Botany, Volume 121, Issue 5, 18 April 2018, Pages 1033–1053, https://doi.org/10.1093/aob/mcx221*
+
+Some parameters were found using the SmaartRoot software (integrated in ImageJ, see source below) combined with beet root scans. For some other parameter we could not find any information in the litterature and thus we had to set them arbitrarly. 
+
+    *A Novel Image Analysis Toolbox Enabling Quantitative Analysis of Root System Architecture. Guillaume Lobet, Loic Pages and Xavier Draye, 2011*
+
+```{r crootbox1}
+# CROOTBOX PARAMETERS
+
+### A. We load the default parameter sets for the simulation 
+rparam <- read_rparam(path = "inputs/param_default.rparam") 
+pparam <- read_pparam(path = "inputs/param_default.pparam")
+
+### B. Define the parameter
+    
+## B.1. We store the input parameters into 'easy-to-understand' variables
+
+# - - - - - - - - - - - ### unit   ### source
+
+## Plant param
+simulation_time <- 200  # [days]
+planting_depth <- 3     # [cm]  (Romaneckas et al., 2009)
+maxB <- 0               # [1]   (Weaver and Bruner, 1927) no basal root for beet
+
+## Root param     nb: a=radius, vitesseP=initial elong. rate
+# Type 1 : Pivot          
+a_1 <- 0.129              # [cm]      littérature https://doi.org/10.3390/agriculture11010021
+vitesseP_1 <- 1.7621349   #[cm/jour] < smartroot
+lb_1 <- 2                 # [cm]      < arbitraire
+la_1 <- 12                # [cm]      < arbitraire
+ln_1<- 1.6031327          # [cm]      < Smartroot
+lmax_1 <- 300             # [cm]      littérature https://doi.org/10.1080/14620316.2006.11512146
+succ_val1_1 <- 2          # Nombre de successeurs sur taproot
+succ_val2_1 <- 2          # Type du successeur 1
+succ_val3_1 <- 3          # Type du successeur 2
+succP_val1_1 <- 2         # Nombre de successeurs sur taproot = succ_val1_1
+succP_val2_1 <- 0.33      # probability  (Weaver and Bruner, 1927) 
+succP_val3_1 <- 0.66      # probability  (Weaver and Bruner, 1927)
+
+# à vérifié !! --> (Weaver and Bruner, 1927)
+# inversé long lateral et latéral normal ? car taille pas logique ?
+
+
+# TYPE 2: Lateral (short)
+a_2 <- 0.10               # [cm]      (Weaver and Bruner, 1927) 
+vitesseP_2 <- 0.3802029   # [cm/jour] < Smartroot 
+lmax_2 <- 7.0             # [cm]      (Weaver and Bruner, 1927)
+sigma_tropism_2 <- 0.2    # ?? !!!!
+
+
+# TYPE 3 : Longue lateral
+a_3 <- 0.10               # [cm]      (Weaver and Bruner, 1927) 
+vitesseP_3 <- 0.75        # [cm/jour] < Smartroot 
+lmax_3 <- 240             # [cm]      (Weaver and Bruner, 1927)
+sigma_tropism_3 <- 0.2  
+
+
+#### B.2. we store all parameter in the rparam and pparam file
+
+launch_simulation <- function(simulation_time=20){
+  ## function to launch the simulation : 
+  ## 1. store parameter defined in the global env. in the P and R param file
+  ## 2. run CRootBox
+  ## 3. return the current rootsystem as a dataframe
+  
+ # Global parameters - PParam
+ pparam$val1[pparam$param == "simtime"] <- simulation_time
+ pparam$val1[pparam$param == "plantingdepth"] <- planting_depth
+ pparam$val1[pparam$param == "maxB"] <- maxB
+ 
+ # Type 1 : Pivot 
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "a"] <-   a_1 
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "r"] <-   vitesseP_1
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "lb"] <-  lb_1
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "la"] <-  la_1
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "lmax"]<- lmax_1
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "ln"] <-  ln_1
+ 
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "successors"] <- succ_val1_1
+ rparam$val2[rparam$name == "Taproot" & rparam$param == "successors"] <- succ_val2_1
+ rparam$val3[rparam$name == "Taproot" & rparam$param == "successors"] <- succ_val3_1
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "successorP"] <- succP_val1_1
+ rparam$val2[rparam$name == "Taproot" & rparam$param == "successorP"] <- succP_val2_1
+ rparam$val3[rparam$name == "Taproot" & rparam$param == "successorP"] <- succP_val3_1
+ 
+ #TYPE 2: Lateral
+ rparam$val1[rparam$name == "Lateral" & rparam$param == "a"] <-   a_2
+ rparam$val1[rparam$name == "Lateral" & rparam$param == "r"] <-   vitesseP_2
+ rparam$val1[rparam$name == "Lateral" & rparam$param == "lmax"] <- lmax_2
+ 
+ #TYPE 3 : Longue lateral
+ rparam$val1[rparam$name == "LongLateral" & rparam$param == "a"] <-   a_3
+ rparam$val1[rparam$name == "LongLateral" & rparam$param == "r"] <-   vitesseP_3
+ rparam$val1[rparam$name == "LongLateral" & rparam$param == "lmax"] <- lmax_3
+ 
+ # update the input text files 
+ write_rparam(rparam, "inputs/param.rparam")
+ write_pparam(pparam, "inputs/param.pparam")
+
+ ### Run crootbox ###
+ system("inputs/crootbox.exe") # Run crootbox for windows
+
+ # Load the simulated data into R to process it and to store it for further use
+ current_rootsystem <- fread("outputs/current_rootsystem.txt", header = T)
+
+ return(current_rootsystem)
+}
+
+# C. We create variables that will contain the 
+# results of our crootbox simulations
+all_rootsystems <- NULL
+all_totlength <- NULL
+n_tot_simulation <- 1
+n_cr_sim <- 0
+
+current_rootsystem <- launch_simulation(simulation_time = 200)
+
+```
+
+########################################################################
+# 3 : EXTRACT DATA FROM ROOTSYSTEM 
+########################################################################
+
+This part is useful only if we loop and create many root system - see later (section 8)
+
+```{r}
+
+# We enrich the root system simulation data with metadata
+# This is needed to find back the information in the large data file 
+# at the end of the simulations
+current_rootsystem <- current_rootsystem %>% 
+                      mutate(vitesse_primaire = vitesseP_1, 
+                             vitesse_secondaire = vitesseP_2,
+                             densite_lat = ln_1,
+                             simulation_id = n_cr_sim)
+
+# We create a table with all the root systems
+all_rootsystems <- rbind(all_rootsystems, current_rootsystem)
+
+# We store the root system simulation with a unique name
+write_csv(current_rootsystem, 
+          paste0("outputs/rootsystems/rootsystem_",vitesseP_1,
+                 "_",vitesseP_2,
+                 "_",ln_1,
+                 ".csv")) 
+
+# OPTIONAL
+# extract the root length density from the simulation data
+# The idead here is, if needed, to store only the relevant info
+# out of our simulation run and discard the rest
+
+totlength <- data.frame(vitesse_primaire = vitesseP_1, 
+                        vitesse_secondaire = vitesseP_2,
+                        densite_lateral = ln_1,
+                        simulation_id = n_cr_sim, 
+                        total_length = sum(current_rootsystem$length), 
+                        n_root = length(unique(current_rootsystem$branchID)))
+
+# We store in a data frame the rld from all the simulations
+all_totlength <- rbind(all_totlength, totlength)
+
+```
+
+
+########################################################################
+# 4 : PLOT THE ROOT SYSTEM
+########################################################################
+
+
+```{r crootbox}
+# Root system from the side
+plot_current_root_S <- function(current_rootsystem){
+  # cat("Plot of the root system from the side ")
+  current_rootsystem %>%
+    ggplot() +
+    theme_classic() +
+    geom_segment(aes(x = x1, y = z1, xend = x2, yend = z2, colour=time), 
+                 alpha=0.9)+
+    scale_colour_gradientn(colours = terrain.colors(10)) +
+    coord_fixed()
+}
+
+# Root system from above
+cat("Plot of the root system from below/above")
+current_rootsystem %>%
+  ggplot() +
+  theme_classic() +
+  geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2, colour = time), alpha=0.9) +
+  scale_colour_gradientn(colours = terrain.colors(10)) +
+  coord_fixed()
+
+plot_current_root_S(current_rootsystem)
+
+```
+
+########################################################################
+# 5 : Get the root volume for each time step and each soil layer
+########################################################################
+
+We created 2 functions here : the first one to extract the root volume (RV) in each layer of soil and the second one to plot it. This will be used to model the nematode population later on.
+
+```{r}
+
+root_volume <- function(current_rootsystem, max_depth=300, layer_width=50, round=4){
+  # function that take root system as a dataframe (containing at least the time, volume, 
+  # length and depth (z2) of each root segment) then compute the lateral root volume for
+  # each soil layer from 0 cm to max_depth (cm) with a layer width of 'layer_width'
+  
+  # calculate the volume of each root segment (assuming this is cylinder pi * r² * l) in cm³ ?
+  current_rootsystem$volume <- pi * current_rootsystem$radius**2 * current_rootsystem$length 
+  
+  # Get a vector with the depth of the layers
+  d <- 0
+  depth_list <- NULL
+  while(d > -max_depth){
+    depth_list <- c( depth_list, d )
+    d <- d - layer_width
+  }
+  #cat("\n depth_list : ", depth_list)
+  
+  # initialize the dataframe to store result of RV
+  simulation_time <- max(current_rootsystem$time)
+  RV <- setNames(data.frame(matrix(ncol = length(depth_list), nrow = simulation_time)), depth_list)
+  
+  # loop over time and depth
+  
+  for(ti in 1:nrow( RV )) {      # for timestep i
+    rootsystem_Ti <- current_rootsystem[ current_rootsystem$time <= ti ]
+    
+    for(depth in depth_list) {    # for depth i
+      rootsystem_Ti_Di <- rootsystem_Ti[ rootsystem_Ti$z2 > (depth - layer_width) & rootsystem_Ti$z2 <= depth ]
+      
+      RV[ti, toString(depth)] <- round(sum(rootsystem_Ti_Di$volume), round)
+      
+    }
+  }
+  # return the dataframe with the RV
+  RV
+}
+
+# test
+RV <- root_volume(current_rootsystem, 100, 20)
+RV
+
+plot_RV <- function(RV, line_width=1){
+  # function that plot the lateral root volume for each soil layer
+  # input : RV , a df containing one colunm for each soil layer 
+  # output : ggplot graph
+  
+  # add a vector time to reshape/melt the DF
+  time <- data.frame("time"= c(0:nrow(RV)))
+  RV <- rbind(c(0), RV) # just add the (0,0) to each layer
+  RV_time <- cbind(time, RV)
+  # melt in 3 columns
+  RV_long <- melt(RV_time, id="time", variable.name = "depth" ) 
+  
+  # plot
+  RV_plot <- ggplot(RV_long,            
+                     aes(x = time,
+                         y = value,
+                         color = depth)) +  geom_line(size=line_width) +
+    labs(y="Root volume (cm³)", x="Time (days)", color="Depth (cm)")
+
+  # return the plot
+  RV_plot
+}
+
+# testing the 2 functions :
+RV <- root_volume(current_rootsystem, 250, 50)
+plot_RV(RV)
+```
+
+
+########################################################################
+# 6.  Build the model for nematode development 
+########################################################################
+
+## Modeling soil temperature
+
+We determined an equation to simulate the soil temperature at different depths for different soil types (described in 'temperature model.pdf'). This temperature is a key parameter for the development of nematodes in the soil.
+
+```{r loaddata}
+
+# optimum parameters of the thermal wave : 
+# beta1: average, beta2: amplitude, beta3: phase shift
+beta_opti <- c(10.26, 7.238, -1.973)
+
+#alpha <- 0.015 # thermal diffusivity of the soil, here wet clay
+
+soiltemp <- function(depth, alpha, timerange, beta_opti = beta_opti) {
+  beta_opti[1] +  
+    beta_opti[2] *  
+        (exp(-depth*sqrt(pi/(alpha*365)))) * 
+        cos( (((2*pi*timerange)/365)) - depth*sqrt(pi/((alpha)*365)) - beta_opti[3] )
+}
+
+```
+
+## Modelling nematod polulation according to soil t° and root volume
+
+
+I put together the 2 bocs of the model: the soil temperature model, and the model that takes this development cycle to model the interaction of the nematodes.
+
+If the temperatures are below the development threshold (here 11°C), the model considers that the population does not develop and therefore remains constant. If temperatures are above the threshold, the population starts to grow. 
+
+**test avec un sol argileux humide à 10cm de profondeur**
+
+### Logistic function
+
+```{r}
+logistic <- function(t, r, K, N0) {
+  K * N0 * exp(r * t) / (K + N0 * (exp(r * t) - 1))
+}
+
+plot(0:100, logistic(t=0:100, r=0.1, K=10, N0=0.1), main='Logistic normal')
+```
+
+### r-Factor function
+
+The relationship between growth rate and temperature is approximately linear. (source : https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4755701/)
+
+```{r}
+
+getRFactor <-function(Temperature, TempOpti=25, TempSEuil=11,TempMax=38 ){
+  #tempseuil : 11°C pour Heterodera Schachtii
+  #tempOpt : 25 °C environ
+  #tempMax : 38°C environ.
+  
+  if(Temperature < TempOpti && Temperature >= TempSEuil){
+    r_factor <- (Temperature - TempSEuil) / (TempOpti - TempSEuil)
+  }
+  
+  else if (Temperature >=TempOpti && Temperature <= TempMax) {
+    r_factor <- 1-((Temperature-TempOpti)/(TempMax-TempOpti))
+  } 
+  else {r_factor <- 0}
+  
+  return(r_factor)
+}
+
+# test & visualize
+t <- c(1:45)
+r_factor <- t*0
+for(i in t){
+  r_factor[i] <- getRFactor(i)
+}
+plot(t, r_factor, main="r-factor evoluation", ylab = "r-factor [-]", xlab = "Temperature [°C]" )
+
+```
+
+### Model function
+
+```{r temperatures et nématodes}
+
+modele <- function(depth_m, alpha, planting_day, seuil,  Pop_init, RV_layer_i, 
+                   K_pot, r_max=0.07) {
+  ## SPEC. : depth  should be given in absolute value and in meters
+  
+  ## r_max <- 0.07 approximately the maximum growing rate for a population ~ the max
+  ## slope of the curve according to in situ data
+  ##  r = r_max * r_factor and r_factor = 1 when temp° is optimal
+
+  time_range <- c(planting_day:(planting_day+nrow(RV_layer_i)-1))
+   
+  pop <- rep(Pop_init,length(time_range))
+  
+  tempSim <- soiltemp(depth_m, alpha, time_range, beta_opti)
+
+  K <- RV_layer_i * K_pot 
+
+  for (i in c(2:(length(time_range))) ){
+    
+    if (tempSim[i]> seuil && K[i,] > 0) {   
+       
+      ri <- r_max * getRFactor(tempSim[i])
+      
+      pop[i] <- logistic(1 , r = ri, K = K[i,], N0 = pop[i-1] )
+    }
+    else {pop[i] = pop[i-1]}
+  }
+  return(pop)
+}
+
+modele(depth_m = 0.1, alpha = 0.015, planting_day = 90, seuil = 11, Pop_init = 10,
+      RV_layer_i = RV[1], K_pot = 100, r_max=0.05)
+
+```
+
+########################################################################
+# 7.  Combining all models and equations 
+########################################################################
+
+*Nematode population function*
+
+```{r}
+Nematode_population <- function(RV, model_fun, PopNem_init,  alpha , planting_day, 
+                                  seuil, K_pot, r_max  ){
+  ## take a dataframe of rootvolume and the function to compute the nematode population,
+  ## then it compute the nematode population for each soil layer.
+  
+  depth_list <- strtoi(names(RV))
+  half_layer_size <- (depth_list[2] - depth_list[1])/2
+  depth_list <- depth_list + half_layer_size
+  
+  # initialize the dataframe to store result of RV
+  simulation_time <- nrow(RV)
+  PopNem <- setNames(data.frame(matrix(ncol = length(depth_list), nrow = simulation_time)),
+                     depth_list)
+  
+  for(i in c(1:ncol(RV))){ # loop over each soil layer
+    
+    d <- depth_list[i] * -1 / 100 # the soil temp model is in absolute value and in meters (not cm)
+    
+    PopNem[,i] <- model_fun(depth_m = d, alpha = alpha, planting_day = planting_day , 
+                            seuil = seuil, K_pot=K_pot, r_max=r_max,
+                            Pop_init = PopNem_init[i], RV_layer_i=RV[i] )
+                          # note : RV[,i] is the RV for soil layer i for every timestep
+  }
+  # return the df with Pop°
+  return(PopNem)
+}
+
+```
+
+**Plot nematode population**
+
+```{r}
+
+plot_PopNem <- function(PopNem, total=FALSE, line_width=1){
+  # function that plot the nematode population for each soil layer
+  # input : PopNem , a df containing one colunm for each soil layer 
+  # output : ggplot graph, if total is True, add a col. with total pop.
+  
+  if(total){
+    PopNem["Total"] <- rowSums(PopNem, na.rm = T)
+  }  
+  
+  # add a vector time to reshape/melt the DF
+  time <- data.frame("time"= c(1:nrow(PopNem)))
+  PopNem_time <- cbind(time, PopNem)
+
+  # melt in 3 columns
+  PopNem_long <- melt(PopNem_time, id="time", variable.name = "depth" ) 
+  
+  # plot
+  PopNem_plot <- ggplot(PopNem_long,            
+                     aes(x = time,
+                         y = value,
+                         color = depth)) +  geom_line(size=line_width) +
+    labs(y="Number of nematodes", x="Time (days from planting date)", color="Depth (cm)")+
+    expand_limits(x = 0, y = 0)
+
+  # return the plot
+  return(PopNem_plot)
+}
+
+# test
+PopNem <- Nematode_population(RV, modele, PopNem_init = c(20, 12, 10, 7, 1),  alpha = 0.015,
+                              planting_day = 90, seuil = 11, K_pot=500, r_max = 0.07)
+
+plot_PopNem(PopNem, T)
+
+```
+
+
+### All from the beginning
+
+```{r}
+# launch simulation
+current_rootsystem <- launch_simulation(simulation_time = 200)
+
+# root volume
+RV <- root_volume(current_rootsystem, 200, 50)
+
+print(paste("You should have", ncol(RV), "value of initial population !"))
+
+# initial population of nematode in each layer of soil
+PopNem_init = c(10, 8, 7, 5)
+
+# model the nem. population
+PopNem <- Nematode_population(RV, modele, PopNem_init,  alpha = 0.015, planting_day = 90, 
+                              seuil = 11, K_pot=500, r_max = 0.07)
+
+# plot Root and Nem
+plot_RV(RV)
+plot_PopNem(PopNem, T)
+plot_current_root_S(current_rootsystem)
+
+```
+
+########################################################################
+# 8.  CHANGING THE ROOT ARCHITECTURE TO SEE THE INFLUENCE ON NEMATODE 
+########################################################################
+
+In this section we decided to see the effect of `ln_1` (the lateral density on the taproot) and `lmax_3` (the maximum length of the long-lateral roots) on the nematode population. We will change their value in a certain range separately and then together. 
+
+First we define another function to make our calculation easier :
+
+## Function simulation_2
+
+```{r}
+launch_simulation2 <- function(simulation_time = 200, ln_1 = 1.6, lmax_3 =  240){
+  ## function to launch the simulation (only changing relevant param): 
+  ## 1. store parameter defined in the global env. in the P and R param file
+  ## 2. run CRootBox
+  ## 3. return the current rootsystem as a dataframe
+  
+ # Parameters relevant for that simulation
+ pparam$val1[pparam$param == "simtime"] <- simulation_time
+ rparam$val1[rparam$name == "Taproot" & rparam$param == "ln"] <-  ln_1
+ rparam$val1[rparam$name == "LongLateral" & rparam$param == "lmax"] <- lmax_3
+ 
+ # update the input text files 
+ write_rparam(rparam, "inputs/param.rparam")
+ write_pparam(pparam, "inputs/param.pparam")
+
+ ### Run crootbox ###
+ system("inputs/crootbox.exe") # Run crootbox for windows
+
+ # Load the simulated data into R to process it and to store it for further use
+ current_rootsystem <- fread("outputs/current_rootsystem.txt", header = T)
+
+ return(current_rootsystem)
+}
+
+```
+
+## Changing `ln_1` parameter only
+
+```{r}
+# Define param values
+ln1_vec <-  c( 1 , 1.6 ,  3.1 ,  4.6 ) 
+lmax_3 <- 170
+
+# empty df for storing results
+Nematode_df <- setNames(data.frame(matrix(ncol = 1, nrow = simulation_time)), 'Time')
+Nematode_df['Time'] <- c(1:simulation_time)
+
+final_pop <- NULL
+all_rootsystems <- NULL
+all_totlength <- NULL
+n_tot_simulation <- length(ln1_vec)
+n_cr_sim <- 0
+n_rep <- 10
+
+# initial population of nematode in each layer of soil
+PopNem_init = c(20, 12, 10, 7, 1) # approx 50 nematodes in the beginning ~(Werf et al., 1986)
+
+### loop over param ###
+for (ln_1 in ln1_vec){
+  # Output the advancement in the simulation
+  n_cr_sim <- n_cr_sim + 1
+      
+  for(i in c(1:n_rep)){    
+    print(paste0(n_cr_sim, " / ", n_tot_simulation, " crootbox sims || Rep - ", i))
+    
+    # assign new value to the param & run
+    current_rootsystem <- launch_simulation2(ln_1 = ln_1, lmax_3 = lmax_3)
+    
+    # root volume
+    RV <- root_volume(current_rootsystem, 250, 50)
+    
+    # model the nem. population
+    PopNem <- Nematode_population(RV, modele, PopNem_init,  alpha = 0.015, planting_day = 90, 
+                                  seuil = 11, K_pot=500, r_max = 0.07)
+    # Store total population
+    Nematode_df[, "total_pop"] <-rowSums(PopNem, na.rm = T)
+    
+    final_pop <- rbind(final_pop, Nematode_df[simulation_time,]%>%
+                                    mutate(ln_1 = ln_1, lmax_3 = lmax_3)
+                       )
+  }
+  
+  #####    
+      # We enrich the root system simulation data with metadata
+      current_rootsystem <- current_rootsystem %>% 
+                            mutate(ln_1 = ln_1, lmax_3 = lmax_3)
+      
+      # We create a table with all the root systems
+      all_rootsystems <- rbind(all_rootsystems, current_rootsystem)
+      
+      # # We store the root system simulation with a unique name
+      # write_csv(current_rootsystem, 
+      #           paste0("outputs/rootsystems/rootsystem_",vp,
+      #                  "_",vs,
+      #                  "_",ln,
+      #                  ".csv"))  
+      
+      # extract the root length density from the simulation data
+      totlength <- data.frame(ln_1 = ln_1, lmax_3 = lmax_3,
+                              simulation_id = n_cr_sim, 
+                              total_length = sum(current_rootsystem$length), 
+                              n_root = length(unique(current_rootsystem$branchID)))
+      
+      # We store in a data frame the rld from all the simulations
+      all_totlength <- rbind(all_totlength, totlength)
+  ###
+  
+  # plot Root and Nem
+  print( plot_RV(RV)+ 
+           ggtitle(paste0('RootVol (ln_1 = ',ln_1, ', lmax_3 = ',lmax_3,')'))  )
+  print( plot_PopNem(PopNem, T) + 
+           ggtitle(paste0('PopNem (ln_1 = ',ln_1, ', lmax_3 = ',lmax_3,')')) )
+
+}
+
+  print( plot_current_root_S(current_rootsystem) +
+           ggtitle(paste0('Rootsystem (ln_1 = ',ln_1, ')') ) )
+```
+
+### Compare the rootsystem
+
+```{r}
+# final result :
+final_pop$ln_1 <- as.factor(final_pop$ln_1)
+
+### boxplot
+ggplot(final_pop, aes(x=ln_1, y=total_pop) ) + 
+  geom_boxplot( fill="green", alpha=0.5)+ 
+  ylab("Final nematode population")+ xlab("Lateral density (cm)")
+
+  
+# Everything on the same plot
+df <- melt(Nematode_df, id.vars="Time")
+ggplot(df, aes(Time,value, col=variable)) + geom_point() +
+        ylab("Nematode population [individuals]") + xlab("Time [days]")
+
+all_totlength %>% 
+  ggplot(aes(ln_1, total_length, 
+             colour = factor(lmax_3))) +
+  geom_line() + 
+  theme_bw()
+
+```
+
+
+## Changing `lmax_3` parameter only
+
+```{r}
+# Define param values
+lmax3_vec <- c( 30 , 90 , 170 , 250)
+ln_1 <- 1.6
+
+# empty df for storing results
+Nematode_df <- setNames(data.frame(matrix(ncol = 1, nrow = simulation_time)), 'Time')
+Nematode_df['Time'] <- c(1:simulation_time)
+
+final_pop <- NULL
+all_rootsystems <- NULL
+all_totlength <- NULL
+n_tot_simulation <- length(lmax3_vec) # * length(ln1_vec)
+n_cr_sim <- 0
+n_rep <- 10
+
+# initial population of nematode in each layer of soil
+PopNem_init = c(20, 12, 10, 7, 1) # approx 50 nematodes in the beginning ~(Werf et al., 1986)
+
+### loop over param ###
+for (lmax_3 in lmax3_vec){
+      # Output the advancement in the simulation
+      n_cr_sim <- n_cr_sim + 1
+      
+  for(i in c(1:n_rep)){    
+    print(paste0(n_cr_sim, " / ", n_tot_simulation, " crootbox sims || Rep - ", i))
+    
+    # assign new value to the param & run
+    current_rootsystem <- launch_simulation2(lmax_3 = lmax_3, ln_1 = ln_1)
+    
+    # root volume
+    RV <- root_volume(current_rootsystem, 250, 50)
+    
+    # model the nem. population
+    PopNem <- Nematode_population(RV, modele, PopNem_init,  alpha = 0.015, planting_day = 90, 
+                                  seuil = 11, K_pot=500, r_max = 0.07)
+    # Store total population
+    Nematode_df[, "total_pop"] <-rowSums(PopNem, na.rm = T)
+    
+    final_pop <- rbind(final_pop, Nematode_df[simulation_time,]%>%
+                                    mutate(ln_1 = ln_1, lmax_3 = lmax_3)
+                       )
+  }
+  
+  #####    
+      # We enrich the root system simulation data with metadata
+      current_rootsystem <- current_rootsystem %>% 
+                            mutate(ln_1 = ln_1, lmax_3 = lmax_3)
+      
+      # We create a table with all the root systems
+      all_rootsystems <- rbind(all_rootsystems, current_rootsystem)
+      
+      # # We store the root system simulation with a unique name
+      # write_csv(current_rootsystem, 
+      #           paste0("outputs/rootsystems/rootsystem_",vp,
+      #                  "_",vs,
+      #                  "_",ln,
+      #                  ".csv"))  
+      
+      # extract the root length density from the simulation data
+      totlength <- data.frame(ln_1 = ln_1, lmax_3 = lmax_3,
+                              simulation_id = n_cr_sim, 
+                              total_length = sum(current_rootsystem$length), 
+                              n_root = length(unique(current_rootsystem$branchID)))
+      
+      # We store in a data frame the rld from all the simulations
+      all_totlength <- rbind(all_totlength, totlength)
+  ###
+  
+  # plot Root and Nem
+  print( plot_RV(RV)+ 
+           ggtitle(paste0('RootVol (ln_1 = ',ln_1, ', lmax_3 = ',lmax_3,')'))  )
+  print( plot_PopNem(PopNem, T) + 
+           ggtitle(paste0('PopNem (ln_1 = ',ln_1, ', lmax_3 = ',lmax_3,')')) )
+}
+
+  print( plot_current_root_S(current_rootsystem) +
+           ggtitle(paste0('Rootsystem (lmax_3 = ',lmax_3, ')') ) )
+```
+
+### Compare the rootsystem
+
+```{r}
+
+# final result :
+final_pop$lmax_3 <- as.factor(final_pop$lmax_3)
+
+### boxplot
+ggplot(final_pop, aes(x=lmax_3, y=total_pop) ) + 
+  geom_boxplot( fill="green", alpha=0.5)+ 
+  ylab("Final nematode population") + xlab("Maximal length (cm)")
+  
+# Everything on the same plot
+df <- melt(Nematode_df, id.vars="Time")
+ggplot(df, aes(Time,value, col=variable)) + geom_point() +
+        ylab("Nematode population [individuals]") + xlab("Time [days]")
+
+
+all_totlength %>% 
+  ggplot(aes(lmax_3, total_length, 
+             colour = factor(ln_1))) +
+  geom_line() + 
+  theme_bw()
+
+```
+
+
+## Changing both `ln_1` and `lmax_3` 
+
+```{r}
+# Define param values
+lmax3_vec <- c( 30 , 90 , 170 , 250)
+ln1_vec <-  c( 1 , 1.6 ,  3.1 ,  4.6 )
+
+# empty df for storing results
+Nematode_df <- setNames(data.frame(matrix(ncol = 1, nrow = simulation_time)), 'Time')
+Nematode_df['Time'] <- c(1:simulation_time)
+
+final_pop <- NULL
+all_rootsystems <- NULL
+all_totlength <- NULL
+n_tot_simulation <- length(lmax3_vec)  * length(ln1_vec)
+n_cr_sim <- 0
+n_rep <- 10
+
+# initial population of nematode in each layer of soil
+PopNem_init = c(20, 12, 10, 7, 1) # approx 50 nematodes in the beginning ~(Werf et al., 1986)
+
+### loop over param ###
+for (ln_1 in ln1_vec){
+  for (lmax_3 in lmax3_vec){
+    # Output the advancement in the simulation
+    n_cr_sim <- n_cr_sim + 1
+    print(paste0(n_cr_sim, " / ", n_tot_simulation, " crootbox sims :"))
+        
+    for(i in c(1:n_rep)){    
+      print(paste0("                  || Rep - ", i))
+      
+      # assign new value to the param & run
+      current_rootsystem <- launch_simulation2(lmax_3 = lmax_3, ln_1 = ln_1)
+      
+      # root volume
+      RV <- root_volume(current_rootsystem, 250, 50)
+      
+      # model the nem. population
+      PopNem <- Nematode_population(RV, modele, PopNem_init,  alpha = 0.015, planting_day = 90, 
+                                    seuil = 11, K_pot=500, r_max = 0.07)
+      # Store total population
+      Nematode_df[, "total_pop"] <-rowSums(PopNem, na.rm = T)
+      
+      final_pop <- rbind(final_pop, Nematode_df[simulation_time,]%>%
+                                      mutate(ln_1 = ln_1, lmax_3 = lmax_3)
+                         )
+    }
+    
+    #####    
+        # We enrich the root system simulation data with metadata
+        current_rootsystem <- current_rootsystem %>% 
+                              mutate(ln_1 = ln_1, lmax_3 = lmax_3)
+        
+        # We create a table with all the root systems
+        all_rootsystems <- rbind(all_rootsystems, current_rootsystem)
+        
+        # # We store the root system simulation with a unique name
+        # write_csv(current_rootsystem, 
+        #           paste0("outputs/rootsystems/rootsystem_",vp,
+        #                  "_",vs,
+        #                  "_",ln,
+        #                  ".csv"))  
+        
+        # extract the root length density from the simulation data
+        totlength <- data.frame(ln_1 = ln_1, lmax_3 = lmax_3,
+                                simulation_id = n_cr_sim, 
+                                total_length = sum(current_rootsystem$length), 
+                                n_root = length(unique(current_rootsystem$branchID)))
+        
+        # We store in a data frame the rld from all the simulations
+        all_totlength <- rbind(all_totlength, totlength)
+    ###
+    
+    # plot Root and Nem
+    # print( plot_RV(RV)+ 
+    #          ggtitle(paste0('RootVol (ln_1 = ',ln_1, ', lmax_3 = ',lmax_3,')'))  )
+    # print( plot_PopNem(PopNem, T) + 
+    #          ggtitle(paste0('PopNem (ln_1 = ',ln_1, ', lmax_3 = ',lmax_3,')')) )
+    # print( plot_current_root_S(current_rootsystem) + 
+    #          ggtitle(paste0('Rootsystem (ln_1 = ',ln_1, ')') ) )
+  }
+}
+#### End loop
+
+
+```
+
+### Compare the rootsystem
+
+```{r}
+# final result :
+final_pop$lmax_3 <- as.factor(final_pop$lmax_3)
+final_pop$ln_1 <- as.factor(final_pop$ln_1)
+
+### boxplot
+png("./fig/boxplot_final.png",width = 13, height = 8, res = 1000, units = "cm")
+
+ggplot(final_pop, aes(fill=lmax_3, y=total_pop, x=ln_1 ) ) + 
+  geom_boxplot(alpha=0.8)+ 
+  ylab("Final nematode population") + xlab("Lateral density (cm)") +
+  labs(fill="Maximum \nlength (cm)")
+dev.off()
+  
+# Everything on the same plot
+df <- melt(Nematode_df, id.vars="Time")
+ggplot(df, aes(Time,value, col=variable)) + geom_point() +
+        ylab("Nematode population [individuals]") + xlab("Time [days]")
+
+
+
+all_totlength %>% 
+  ggplot(aes(lmax_3, total_length, 
+             colour = factor(ln_1))) +
+  geom_line(size=1) + ylab("Total root length (cm)") + xlab("Maximal length - lmax (cm)")+
+  labs(colour= "Lateral \ndensity (cm)")+
+  theme_bw()
+
+# Root system
+all_rootsystems %>%
+  ggplot() +
+  theme_classic() +
+  geom_segment(aes(x = x1, y = z1, xend = x2, yend = z2), alpha=0.9) +
+  coord_fixed() +
+  facet_grid(ln_1 ~ lmax_3)
+
+
+```
+
+
