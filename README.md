@@ -8,9 +8,10 @@ In this project (part of the course LBRAI2219 - Modelling biological organism at
 
 In this project you will find two code file : 
 
-- `LBRAI2219_group4_model_soil-temperature` include all the code to model the soil temperature using the Newtown equation and the temperature data from Charleroi Belgium.
 - `LBRAI2219_group4_model_nematod-betterave` include all the code to model the beet roosystem aswell as the nematode population and the intercations between the two.
 - `LBRAI2219_group4_model_nematod-betterave.HTML` dowload this file and open it in you browser to quickly understand what we did and easily visualize all the figure without having to run the all code and download CRootBox.
+- `LBRAI2219_group4_model_soil-temperature` include all the code to model the soil temperature using the Newtown equation and the temperature data from Charleroi Belgium. It also include the calculation of the root architecture parameters using the data extracted in ImageJ - SmaartRoot with the scans of the rootsystem.
+- `LBRAI2219_group4_model_soil-temperature.HTML` Same but this is the compiled html file ready to be viewed.
 
 ### The sources and extra documentation
 
